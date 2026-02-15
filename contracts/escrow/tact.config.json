@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tact-lang/tact/main/src/config/configSchema.json",
+  "projects": [
+    {
+      "name": "MonofactureEscrow",
+      "path": "contracts/monofacture_escrow.tact",
+      "output": "build\\MonofactureEscrow",
+      "options": {
+        "debug": false,
+        "external": false
+      },
+      "mode": "full"
+    }
+  ]
+}

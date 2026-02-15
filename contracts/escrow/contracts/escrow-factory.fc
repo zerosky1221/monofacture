@@ -1,0 +1,251 @@
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; MONOFACTURE ESCROW FACTORY v1.0
+;; Factory contract for deploying escrow deals
+;;
+;; Deployed once per network. Creates child escrow contracts for each deal.
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+#include "stdlib.fc";
+
+;; ═══ Storage Layout ═══
+;; addr     owner              ;; Admin who can update settings
+;; addr     platform_wallet    ;; Where funds go on release
+;; uint16   fee_rate           ;; Basis points (500 = 5%)
+;; uint64   deal_count         ;; Counter for deals
+;; cell     deal_code          ;; Child escrow contract code (ref)
+
+;; ═══ Operation Codes ═══
+const int OP_CREATE_DEAL = 0x01;
+const int OP_UPDATE_CODE = 0x02;
+const int OP_UPDATE_FEE  = 0x03;
+const int OP_WITHDRAW    = 0x04;
+
+;; ═══ Error Codes ═══
+const int ERR_UNAUTHORIZED = 101;
+const int ERR_INVALID_ARGS = 107;
+
+;; ═══ Constants ═══
+const int DEPLOY_GAS = 100000000;       ;; 0.1 TON for deployment gas
+const int MIN_DEAL_AMOUNT = 100000000;  ;; 0.1 TON minimum deal amount
+
+;; ═══ Utility Functions ═══
+;; Compare two slices for equality (TVM SDEQ instruction)
+int equal_slices(slice a, slice b) asm "SDEQ";
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; STORAGE
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+global slice ctx_owner;
+global slice ctx_platform_wallet;
+global int ctx_fee_rate;
+global int ctx_deal_count;
+global cell ctx_deal_code;
+
+() load_data() impure inline {
+    slice ds = get_data().begin_parse();
+    ctx_owner = ds~load_msg_addr();
+    ctx_platform_wallet = ds~load_msg_addr();
+    ctx_fee_rate = ds~load_uint(16);
+    ctx_deal_count = ds~load_uint(64);
+    ctx_deal_code = ds~load_ref();
+}
+
+() save_data() impure inline {
+    set_data(begin_cell()
+        .store_slice(ctx_owner)
+        .store_slice(ctx_platform_wallet)
+        .store_uint(ctx_fee_rate, 16)
+        .store_uint(ctx_deal_count, 64)
+        .store_ref(ctx_deal_code)
+    .end_cell());
+}
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; HELPERS
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+;; Build initial data cell for child escrow contract
+;; Layout (split across 2 cells to avoid overflow):
+;; Cell 1: status (8) + deal_id (256) + advertiser (267) + publisher (267) + ref->Cell2
+;; Cell 2: platform (267) + total_amount (coins) + publisher_amount (coins) + deadline (32) + created_at (32)
+cell build_deal_data(int deal_id, slice advertiser, slice publisher,
+                     int total_amount, int publisher_amount, int deadline) inline {
+    cell data2 = begin_cell()
+        .store_slice(ctx_platform_wallet)
+        .store_coins(total_amount)
+        .store_coins(publisher_amount)
+        .store_uint(deadline, 32)
+        .store_uint(now(), 32)                ;; created_at
+    .end_cell();
+
+    return begin_cell()
+        .store_uint(0, 8)                     ;; status = PENDING
+        .store_uint(deal_id, 256)             ;; deal_id (SHA256)
+        .store_slice(advertiser)
+        .store_slice(publisher)
+        .store_ref(data2)
+    .end_cell();
+}
+
+;; Build state_init for child contract
+cell build_state_init(cell data) inline {
+    return begin_cell()
+        .store_uint(0, 2)                     ;; 0b00 - no split_depth, no special
+        .store_maybe_ref(ctx_deal_code)       ;; code
+        .store_maybe_ref(data)                ;; data
+        .store_uint(0, 1)                     ;; no library
+    .end_cell();
+}
+
+;; Compute contract address from state_init
+slice compute_address(cell state_init) inline {
+    return begin_cell()
+        .store_uint(4, 3)                     ;; 0b100 - addr_std
+        .store_int(0, 8)                      ;; workchain = 0
+        .store_uint(cell_hash(state_init), 256)
+    .end_cell().begin_parse();
+}
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; MAIN RECEIVER
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    if (flags & 1) { return (); }  ;; ignore bounced
+
+    slice sender = cs~load_msg_addr();
+    load_data();
+
+    ;; Require non-empty body
+    if (in_msg_body.slice_empty?()) { return (); }
+
+    int op = in_msg_body~load_uint(32);
+    if (op == 0) { return (); }  ;; ignore text comments
+
+    int query_id = in_msg_body~load_uint(64);
+
+    ;; ═══ CREATE DEAL (op=0x01) ═══
+    ;; Anyone can create a deal (usually called by backend on behalf of advertiser)
+    if (op == OP_CREATE_DEAL) {
+        ;; Parse deal params
+        int deal_id = in_msg_body~load_uint(256);        ;; SHA256 of string dealId
+        slice advertiser = in_msg_body~load_msg_addr();
+        slice publisher = in_msg_body~load_msg_addr();
+        int total_amount = in_msg_body~load_coins();
+        int publisher_amount = in_msg_body~load_coins();
+        int deadline = in_msg_body~load_uint(32);
+
+        ;; Validate
+        throw_unless(ERR_INVALID_ARGS, total_amount >= MIN_DEAL_AMOUNT);
+        throw_unless(ERR_INVALID_ARGS, publisher_amount > 0);
+        throw_unless(ERR_INVALID_ARGS, publisher_amount <= total_amount);
+        throw_unless(ERR_INVALID_ARGS, deadline > now());
+        throw_unless(ERR_INVALID_ARGS, ~ equal_slices(advertiser, publisher));
+
+        ;; Build child contract
+        cell deal_data = build_deal_data(deal_id, advertiser, publisher,
+                                         total_amount, publisher_amount, deadline);
+        cell state_init = build_state_init(deal_data);
+        slice deal_address = compute_address(state_init);
+
+        ;; Deploy child contract
+        cell msg = begin_cell()
+            .store_uint(0x18, 6)              ;; nobounce
+            .store_slice(deal_address)
+            .store_coins(DEPLOY_GAS)
+            .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+            .store_ref(state_init)
+            .store_uint(0, 1)                 ;; no body
+        .end_cell();
+        send_raw_message(msg, 1);             ;; pay fees separately
+
+        ;; Increment counter
+        ctx_deal_count += 1;
+        save_data();
+
+        return ();
+    }
+
+    ;; ═══ UPDATE CODE (op=0x02) — Admin only ═══
+    if (op == OP_UPDATE_CODE) {
+        throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, ctx_owner));
+
+        ctx_deal_code = in_msg_body~load_ref();
+        save_data();
+
+        return ();
+    }
+
+    ;; ═══ UPDATE FEE (op=0x03) — Admin only ═══
+    if (op == OP_UPDATE_FEE) {
+        throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, ctx_owner));
+
+        ctx_fee_rate = in_msg_body~load_uint(16);
+        save_data();
+
+        return ();
+    }
+
+    ;; ═══ WITHDRAW (op=0x04) — Admin only ═══
+    if (op == OP_WITHDRAW) {
+        throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, ctx_owner));
+
+        int amount = in_msg_body~load_coins();
+        slice to_addr = in_msg_body~load_msg_addr();
+
+        cell msg = begin_cell()
+            .store_uint(0x18, 6)
+            .store_slice(to_addr)
+            .store_coins(amount)
+            .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+        .end_cell();
+        send_raw_message(msg, 1);
+
+        return ();
+    }
+
+    ;; Unknown op - ignore
+    return ();
+}
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; GET METHODS
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+;; Compute deal contract address from parameters
+slice get_deal_address(int deal_id, slice advertiser, slice publisher,
+                       int total_amount, int publisher_amount, int deadline) method_id {
+    load_data();
+    cell deal_data = build_deal_data(deal_id, advertiser, publisher,
+                                     total_amount, publisher_amount, deadline);
+    cell state_init = build_state_init(deal_data);
+    return compute_address(state_init);
+}
+
+int get_deal_count() method_id {
+    load_data();
+    return ctx_deal_count;
+}
+
+int get_fee_rate() method_id {
+    load_data();
+    return ctx_fee_rate;
+}
+
+slice get_owner() method_id {
+    load_data();
+    return ctx_owner;
+}
+
+slice get_platform_wallet() method_id {
+    load_data();
+    return ctx_platform_wallet;
+}
+
+cell get_deal_code() method_id {
+    load_data();
+    return ctx_deal_code;
+}

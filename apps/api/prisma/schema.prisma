@@ -1,0 +1,1372 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// TELEGRAM ADS MARKETPLACE - PRISMA SCHEMA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENUMS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+enum UserRole {
+  USER
+  CHANNEL_OWNER
+  ADVERTISER
+  PR_MANAGER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  PENDING_VERIFICATION
+}
+
+enum ChannelStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+enum ChannelCategory {
+  CRYPTO
+  TECH
+  BUSINESS
+  ENTERTAINMENT
+  NEWS
+  EDUCATION
+  LIFESTYLE
+  GAMING
+  SPORTS
+  FINANCE
+  HEALTH
+  TRAVEL
+  FOOD
+  FASHION
+  MUSIC
+  ART
+  SCIENCE
+  POLITICS
+  OTHER
+}
+
+enum AdFormat {
+  POST
+  FORWARD
+  PIN_MESSAGE
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum DealStatus {
+  CREATED
+  PENDING_PAYMENT
+  PAYMENT_RECEIVED
+  IN_PROGRESS
+  CREATIVE_PENDING
+  CREATIVE_SUBMITTED
+  CREATIVE_REVISION_REQUESTED
+  CREATIVE_APPROVED
+  SCHEDULED
+  POSTED
+  VERIFYING
+  VERIFIED
+  COMPLETED
+  DISPUTED
+  REFUNDED
+  CANCELLED
+  EXPIRED
+}
+
+enum EscrowStatus {
+  PENDING
+  FUNDED
+  LOCKED
+  RELEASING
+  RELEASED
+  REFUNDING
+  REFUNDED
+  DISPUTED
+  CANCELLED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  ESCROW_LOCK
+  ESCROW_RELEASE
+  ESCROW_REFUND
+  PLATFORM_FEE
+  PAYOUT
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED_ADVERTISER
+  RESOLVED_CHANNEL_OWNER
+  CANCELLED
+}
+
+enum DisputeReason {
+  POST_NOT_PUBLISHED
+  POST_DELETED_EARLY
+  POST_MODIFIED
+  WRONG_CONTENT
+  WRONG_TIME
+  OTHER
+}
+
+enum NotificationType {
+  // Legacy (keep for existing records)
+  DEAL_CREATED
+  DEAL_UPDATED
+  PAYMENT_RECEIVED
+  CREATIVE_SUBMITTED
+  CREATIVE_APPROVED
+  CREATIVE_REJECTED
+  POST_SCHEDULED
+  POST_PUBLISHED
+  POST_VERIFIED
+  PAYOUT_SENT
+  DISPUTE_OPENED
+  SYSTEM
+
+  // Deal lifecycle
+  DEAL_REQUEST_RECEIVED
+  DEAL_REQUEST_ACCEPTED
+  DEAL_REQUEST_REJECTED
+  DEAL_PAYMENT_RECEIVED
+  DEAL_CONTENT_SUBMITTED
+  DEAL_CONTENT_APPROVED
+  DEAL_CONTENT_REJECTED
+  DEAL_PUBLISHED
+  DEAL_COMPLETED
+  DEAL_CANCELLED
+  DEAL_DISPUTE_OPENED
+  DEAL_DISPUTE_RESOLVED
+  DEAL_TIMEOUT_WARNING
+  DEAL_EXPIRED
+
+  // Reviews
+  REVIEW_RECEIVED
+  REVIEW_REPLY
+
+  // Channel
+  CHANNEL_VERIFIED
+  CHANNEL_VERIFICATION_REJECTED
+  CHANNEL_NEW_ORDER
+
+  // Wallet
+  WALLET_DEPOSIT_CONFIRMED
+  WALLET_WITHDRAWAL_SENT
+  WALLET_FUNDS_RELEASED
+  WALLET_FUNDS_LOCKED
+
+  // Referral
+  REFERRAL_SIGNUP
+  REFERRAL_BONUS_EARNED
+
+  // Support
+  TICKET_CREATED
+  TICKET_REPLY
+  TICKET_RESOLVED
+
+  // System
+  WELCOME
+  SYSTEM_ANNOUNCEMENT
+  SECURITY_ALERT
+}
+
+enum TicketCategory {
+  PAYMENT_ISSUE
+  DEAL_PROBLEM
+  DISPUTE
+  USER_REPORT
+  CHANNEL_REPORT
+  CHANNEL_VERIFICATION
+  ACCOUNT_ISSUE
+  FEATURE_REQUEST
+  BUG_REPORT
+  QUESTION
+  OTHER
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_USER
+  RESOLVED
+  CLOSED
+}
+
+enum PostStatus {
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+  DELETED
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// USER MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model User {
+  id                   String     @id @default(cuid())
+  telegramId           BigInt     @unique
+  telegramUsername     String?
+  firstName            String?
+  lastName             String?
+  photoUrl             String?
+  languageCode         String?    @default("en")
+  isPremium            Boolean    @default(false)
+  roles                UserRole[] @default([USER])
+  status               UserStatus @default(ACTIVE)
+  tonWalletAddress     String?
+  tonWalletConnectedAt DateTime?
+  xp                   Int        @default(0)
+  level                Int        @default(1)
+  notificationsEnabled Boolean    @default(true)
+  emailNotifications   Boolean    @default(false)
+  email                String?
+  isVerified           Boolean    @default(false)
+  verifiedAt           DateTime?
+  totalDeals           Int        @default(0)
+  successfulDeals      Int        @default(0)
+  totalSpent           BigInt     @default(0)
+  totalEarned          BigInt     @default(0)
+  rating               Float      @default(0)
+  reviewCount          Int        @default(0)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  lastActiveAt         DateTime   @default(now())
+
+  // Relations
+  sessions              UserSession[]
+  wallets               UserWallet[]
+  ownedChannels         Channel[]             @relation("ChannelOwner")
+  channelAdmins         ChannelAdmin[]
+  campaigns             Campaign[]
+  dealsAsAdvertiser     Deal[]                @relation("DealAdvertiser")
+  dealsAsChannelOwner   Deal[]                @relation("DealChannelOwner")
+  campaignApplications  CampaignApplication[]
+  transactions          Transaction[]
+  notifications         Notification[]
+  reviewsGiven          Review[]              @relation("ReviewAuthor")
+  reviewsReceived       Review[]              @relation("ReviewRecipient")
+  channelReviewsGiven   ChannelReview[]       @relation("ChannelReviewsGiven")
+  disputesInitiated     Dispute[]
+  dealTimelines         DealTimeline[]
+  dealMessages          DealMessage[]
+  balance               UserBalance?
+  referralCode          String?           @unique
+  notificationSettings  NotificationSettings?
+  supportTickets        SupportTicket[]
+  supportMessages       SupportMessage[]
+  onboarding            UserOnboarding?
+  favorites             Favorite[]
+  savedFilters          SavedFilter[]
+  achievements          UserAchievement[]
+  userLevel             UserLevel?
+
+  @@index([telegramId])
+  @@index([telegramUsername])
+  @@index([status])
+  @@index([xp(sort: Desc)])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  refreshToken String?  @unique
+  deviceInfo   Json?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  lastUsedAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model UserWallet {
+  id           String    @id @default(cuid())
+  userId       String
+  address      String    @unique
+  publicKey    String?
+  isMain       Boolean   @default(false)
+  balance      BigInt    @default(0)
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([address])
+  @@map("user_wallets")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHANNEL MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Channel {
+  id                String            @id @default(cuid())
+  telegramId        BigInt            @unique
+  username          String?           @unique
+  title             String
+  description       String?
+  inviteLink        String?
+  photoUrl          String?
+  ownerId           String
+  status            ChannelStatus     @default(PENDING_VERIFICATION)
+  isActive          Boolean           @default(false)
+  categories        ChannelCategory[]
+  tags              String[]          @default([])
+  language          String            @default("en")
+  country           String?
+  isBotAdded        Boolean           @default(false)
+  botAddedAt        DateTime?
+  verificationToken String?
+  verifiedAt        DateTime?
+  subscriberCount   Int               @default(0)
+  averageViews      Int               @default(0)
+  averageReach      Int               @default(0)
+  engagementRate    Float             @default(0)
+  premiumSubscribers Float            @default(0)
+  totalDeals        Int               @default(0)
+  successfulDeals   Int               @default(0)
+  totalEarnings     BigInt            @default(0)
+  rating            Float             @default(0)
+  reviewCount       Int               @default(0)
+  isPublic          Boolean           @default(true)
+  isOwnerAnonymous  Boolean           @default(false)
+  autoAcceptDeals   Boolean           @default(false)
+  isAcceptingOrders Boolean           @default(true)
+  adRequirements    String?
+  minBudget         BigInt?
+  maxBudget         BigInt?
+  statsUpdatedAt    DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  // Relations
+  owner         User                  @relation("ChannelOwner", fields: [ownerId], references: [id])
+  admins        ChannelAdmin[]
+  pricing       ChannelPricing[]
+  stats         ChannelStats?
+  statsHistory  ChannelStatsHistory[]
+  deals         Deal[]
+  applications  CampaignApplication[]
+  reviews            Review[]
+  channelReviews     ChannelReview[]
+  publishedPosts     PublishedPost[]
+  channelRating            Float             @default(0)
+  channelReviewCount       Int               @default(0)
+  supportTickets           SupportTicket[]
+  favorites                Favorite[]
+  verificationTier         VerificationTier  @default(NONE)
+  verificationRequests     VerificationRequest[]
+
+  @@index([telegramId])
+  @@index([username])
+  @@index([ownerId])
+  @@index([status])
+  @@index([categories])
+  @@index([subscriberCount])
+  @@index([rating])
+  @@map("channels")
+}
+
+model ChannelPricing {
+  id               String   @id @default(cuid())
+  channelId        String
+  adFormat         AdFormat
+  pricePerHour     BigInt
+  pricePermanent   BigInt?
+  minHours         Int      @default(1)
+  maxHours         Int      @default(168)
+  publishTimeStart String?
+  publishTimeEnd   String?
+  timezone         String   @default("UTC")
+  currency         String   @default("TON")
+  description      String?
+  duration         Int?     // deprecated
+  includes         String[] @default([])
+  isActive         Boolean  @default(true)
+  minOrderTime     Int?
+  maxOrderTime     Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, adFormat])
+  @@index([channelId])
+  @@index([adFormat])
+  @@map("channel_pricing")
+}
+
+model ChannelStats {
+  id                      String   @id @default(cuid())
+  channelId               String   @unique
+  subscriberCount         Int      @default(0)
+  subscriberGrowth24h     Int      @default(0)
+  subscriberGrowth7d      Int      @default(0)
+  subscriberGrowth30d     Int      @default(0)
+  averageViews            Int      @default(0)
+  averageReach            Int      @default(0)
+  averageViewsGrowth      Float    @default(0)
+  engagementRate          Float    @default(0)
+  averageReactions        Int      @default(0)
+  averageComments         Int      @default(0)
+  averageShares           Int      @default(0)
+  premiumSubscribers      Float    @default(0)
+  premiumViewsPercentage  Float    @default(0)
+  languageDistribution    Json?
+  genderDistribution      Json?
+  ageDistribution         Json?
+  geoDistribution         Json?
+  postsLast24h            Int      @default(0)
+  postsLast7d             Int      @default(0)
+  postsLast30d            Int      @default(0)
+  averagePostsPerDay      Float    @default(0)
+  peakHours               Int[]    @default([])
+  rawTelegramStats        Json?
+  updatedAt               DateTime @updatedAt
+  lastFetchedAt           DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@map("channel_stats")
+}
+
+model ChannelStatsHistory {
+  id              String   @id @default(cuid())
+  channelId       String
+  subscriberCount Int
+  averageViews    Int      @default(0)
+  engagementRate  Float    @default(0)
+  recordedAt      DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId])
+  @@index([recordedAt])
+  @@map("channel_stats_history")
+}
+
+model ChannelAdmin {
+  id                   String    @id @default(cuid())
+  channelId            String
+  userId               String
+  canManageDeals       Boolean   @default(true)
+  canManagePricing     Boolean   @default(false)
+  canManageSettings    Boolean   @default(false)
+  canWithdraw          Boolean   @default(false)
+  canAddAdmins         Boolean   @default(false)
+  telegramAdminRights  Json?
+  isActive             Boolean   @default(true)
+  addedAt              DateTime  @default(now())
+  lastVerifiedAt       DateTime?
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([channelId])
+  @@index([userId])
+  @@map("channel_admins")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CAMPAIGN MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Campaign {
+  id                 String            @id @default(cuid())
+  advertiserId       String
+  title              String
+  description        String
+  brief              String?
+  status             CampaignStatus    @default(DRAFT)
+  targetCategories   ChannelCategory[]
+  targetLanguages    String[]          @default([])
+  targetCountries    String[]          @default([])
+  minSubscribers     Int?
+  maxSubscribers     Int?
+  minEngagement      Float?
+  adFormats          AdFormat[]
+  totalBudget        BigInt
+  minPricePerPost    BigInt?
+  maxPricePerPost    BigInt?
+  currency           String            @default("TON")
+  startDate          DateTime?
+  endDate            DateTime?
+  preferredPostTimes Int[]             @default([])
+  creativeGuidelines String?
+  sampleContent      String?
+  attachments        String[]          @default([])
+  doNotInclude       String[]          @default([])
+  applicationCount   Int               @default(0)
+  acceptedCount      Int               @default(0)
+  completedDeals     Int               @default(0)
+  totalSpent         BigInt            @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  publishedAt        DateTime?
+  closedAt           DateTime?
+
+  // Relations
+  advertiser   User                  @relation(fields: [advertiserId], references: [id])
+  applications CampaignApplication[]
+  deals        Deal[]
+
+  @@index([advertiserId])
+  @@index([status])
+  @@index([targetCategories])
+  @@index([createdAt])
+  @@map("campaigns")
+}
+
+model CampaignApplication {
+  id            String                @id @default(cuid())
+  campaignId    String
+  channelId     String
+  userId        String
+  proposedPrice BigInt
+  adFormat      AdFormat
+  message       String?
+  proposedDate  DateTime?
+  proposedTime  String?
+  status        CampaignApplicationStatus @default(PENDING)
+  createdAt     DateTime              @default(now())
+  respondedAt   DateTime?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  channel  Channel  @relation(fields: [channelId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@unique([campaignId, channelId])
+  @@index([campaignId])
+  @@index([channelId])
+  @@index([status])
+  @@map("campaign_applications")
+}
+
+enum CampaignApplicationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEAL MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Deal {
+  id                 String      @id @default(cuid())
+  referenceNumber    String      @unique
+  advertiserId       String
+  channelOwnerId     String
+  channelId          String
+  campaignId         String?
+  adFormat           AdFormat
+  price              BigInt
+  platformFee        BigInt
+  totalAmount        BigInt
+  currency           String      @default("TON")
+  status             DealStatus  @default(CREATED)
+  previousStatus     DealStatus?
+  brief              String?
+  requirements       String?
+  attachments        String[]    @default([])
+  scheduledPostTime  DateTime?
+  postDuration       Int?        // hours
+  isPermanent        Boolean     @default(false)
+  scheduledDeleteAt  DateTime?
+  creativeDeadline   DateTime?
+  paymentDeadline    DateTime?
+  completionDeadline DateTime?
+  timeoutMinutes     Int         @default(1440) // 24 hours
+  lastActivityAt     DateTime    @default(now())
+  isUrgent           Boolean     @default(false)
+  requiresVerification Boolean   @default(true)
+  isAnonymous        Boolean     @default(false)  // Hide advertiser identity from channel owner
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  paidAt             DateTime?
+  contentSubmittedAt DateTime?
+  publishedAt        DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+
+  // Relations
+  advertiser     User           @relation("DealAdvertiser", fields: [advertiserId], references: [id])
+  channelOwner   User           @relation("DealChannelOwner", fields: [channelOwnerId], references: [id])
+  channel        Channel        @relation(fields: [channelId], references: [id])
+  campaign       Campaign?      @relation(fields: [campaignId], references: [id])
+  escrow              Escrow?
+  creative            DealCreative?
+  timeline            DealTimeline[]
+  messages            DealMessage[]
+  reviews             Review[]
+  channelReviews      ChannelReview[]
+  disputes            Dispute[]
+  publishedPosts      PublishedPost[]
+  balanceTransactions BalanceTransaction[]
+  referralEarnings    ReferralEarning[]
+  supportTickets      SupportTicket[]
+
+  @@index([advertiserId])
+  @@index([channelOwnerId])
+  @@index([channelId])
+  @@index([campaignId])
+  @@index([status])
+  @@index([status, scheduledPostTime])
+  @@index([createdAt])
+  @@map("deals")
+}
+
+model DealCreative {
+  id               String   @id @default(cuid())
+  dealId           String   @unique
+  text             String?
+  mediaUrls        String[] @default([])
+  buttons          Json?    // InlineButton[][]
+  version          Int      @default(1)
+  previousVersions Json?    // DealCreativeVersion[]
+  status           CreativeStatus @default(DRAFT)
+  advertiserNotes  String?
+  revisionRequests String[] @default([])
+  // Telegram message reference for rich content (photos, formatting, links)
+  sourceChatId     BigInt?  // Chat where publisher sent the message to bot
+  sourceMessageId  Int?     // Message ID in publisher's chat with bot
+  submittedAt      DateTime?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  deal Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@map("deal_creatives")
+}
+
+enum CreativeStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+model DealTimeline {
+  id         String      @id @default(cuid())
+  dealId     String
+  event      String
+  fromStatus DealStatus?
+  toStatus   DealStatus?
+  actorId    String?
+  actorType  ActorType?
+  metadata   Json?
+  note       String?
+  createdAt  DateTime    @default(now())
+
+  deal  Deal  @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([dealId])
+  @@index([createdAt])
+  @@map("deal_timeline")
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+  BOT
+}
+
+model DealMessage {
+  id        String   @id @default(cuid())
+  dealId    String
+  senderId  String
+  content   String
+  isSystem  Boolean  @default(false)
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  deal   Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  sender User @relation(fields: [senderId], references: [id])
+
+  @@index([dealId])
+  @@index([senderId])
+  @@map("deal_messages")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ESCROW & PAYMENT MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Escrow {
+  id                  String       @id @default(cuid())
+  dealId              String       @unique
+  escrowWalletAddress String
+  advertiserWallet    String
+  channelOwnerWallet  String
+  platformWallet      String
+  amount              BigInt
+  platformFee         BigInt
+  totalAmount         BigInt
+  status              EscrowStatus @default(PENDING)
+  fundingTxHash       String?
+  releaseTxHash       String?
+  refundTxHash        String?
+  fundedAt            DateTime?
+  releasedAt          DateTime?
+  refundedAt          DateTime?
+  metadata            Json?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  expiresAt           DateTime?
+
+  deal         Deal          @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([dealId])
+  @@index([status])
+  @@index([escrowWalletAddress])
+  @@map("escrows")
+}
+
+model Transaction {
+  id           String            @id @default(cuid())
+  userId       String?
+  escrowId     String?
+  type         TransactionType
+  status       TransactionStatus @default(PENDING)
+  amount       BigInt
+  fee          BigInt            @default(0)
+  currency     String            @default("TON")
+  fromAddress  String?
+  toAddress    String?
+  txHash       String?           @unique
+  lt           BigInt?
+  utime        DateTime?
+  description  String?
+  metadata     Json?
+  errorMessage String?
+  createdAt    DateTime          @default(now())
+  confirmedAt  DateTime?
+
+  user   User?   @relation(fields: [userId], references: [id])
+  escrow Escrow? @relation(fields: [escrowId], references: [id])
+
+  @@index([userId])
+  @@index([escrowId])
+  @@index([type, status, createdAt])
+  @@index([txHash])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DISPUTE MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Dispute {
+  id              String        @id @default(cuid())
+  dealId          String
+  initiatorId     String
+  reason          DisputeReason
+  description     String
+  evidence        String[]      @default([])
+  status          DisputeStatus @default(OPEN)
+  resolution      String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  requestedRefund BigInt?
+  actualRefund    BigInt?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  deal      Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  initiator User @relation(fields: [initiatorId], references: [id])
+
+  @@index([dealId])
+  @@index([initiatorId])
+  @@index([status])
+  @@map("disputes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PUBLISHING & VERIFICATION MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model PublishedPost {
+  id                   String     @id @default(cuid())
+  dealId               String
+  channelId            String
+  telegramMessageId    Int?
+  content              String?
+  mediaUrls            String[]   @default([])
+  buttons              Json?      // Array of button objects
+  status               PostStatus @default(SCHEDULED)
+  scheduledFor         DateTime?
+  publishedAt          DateTime?
+  deletedAt            DateTime?
+  scheduledDeleteAt    DateTime?
+  deleteJobId          String?
+  errorMessage         String?
+  views                Int        @default(0)
+  reactions            Int        @default(0)
+  forwards             Int        @default(0)
+  lastVerifiedAt       DateTime?
+  verificationCount    Int        @default(0)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  deal          Deal               @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  channel       Channel            @relation(fields: [channelId], references: [id])
+  verifications PostVerification[]
+
+  @@index([dealId])
+  @@index([channelId])
+  @@index([status])
+  @@index([publishedAt])
+  @@index([scheduledFor])
+  @@map("published_posts")
+}
+
+model PostVerification {
+  id        String   @id @default(cuid())
+  postId    String
+  exists    Boolean
+  views     Int?
+  reactions Int?
+  forwards  Int?
+  createdAt DateTime @default(now())
+
+  post PublishedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([createdAt])
+  @@map("post_verifications")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REVIEW & NOTIFICATION MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Review {
+  id                  String    @id @default(cuid())
+  dealId              String
+  authorId            String
+  recipientId         String
+  channelId           String?
+  rating              Int       // 1-5 overall
+  communicationRating Int?      // 1-5
+  timelinessRating    Int?      // 1-5
+  qualityRating       Int?      // 1-5
+  comment             String?
+  tags                String[]  @default([])
+  response            String?
+  respondedAt         DateTime?
+  isPublic            Boolean   @default(true)
+  isVerified          Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  author    User     @relation("ReviewAuthor", fields: [authorId], references: [id])
+  recipient User     @relation("ReviewRecipient", fields: [recipientId], references: [id])
+  channel   Channel? @relation(fields: [channelId], references: [id])
+
+  @@unique([dealId, authorId])
+  @@index([recipientId])
+  @@index([channelId])
+  @@index([rating])
+  @@map("reviews")
+}
+
+model ChannelReview {
+  id                String   @id @default(cuid())
+  dealId            String
+  channelId         String
+  fromUserId        String
+  overallRating     Int      // 1-5
+  audienceQuality   Int?     // 1-5
+  engagementRating  Int?     // 1-5
+  reachAccuracy     Int?     // 1-5
+  comment           String?  @db.Text
+  tags              String[] @default([])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  deal     Deal    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  channel  Channel @relation(fields: [channelId], references: [id])
+  fromUser User    @relation("ChannelReviewsGiven", fields: [fromUserId], references: [id])
+
+  @@unique([dealId, fromUserId])
+  @@index([channelId])
+  @@index([dealId])
+  @@index([overallRating])
+  @@map("channel_reviews")
+}
+
+model Notification {
+  id         String           @id @default(cuid())
+  userId     String
+  type       NotificationType
+  title      String
+  message    String
+  entityType String?
+  entityId   String?
+  isSent     Boolean          @default(false)
+  sentAt     DateTime?
+  sentVia    String[]         @default([])
+  isRead     Boolean          @default(false)
+  readAt     DateTime?
+  metadata   Json?
+  createdAt  DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IN-APP BALANCE & WITHDRAWAL MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+enum BalanceTransactionType {
+  DEAL_EARNING         // Publisher earned from deal
+  REFERRAL_EARNING     // Referral commission
+  WITHDRAWAL           // Withdrawal to external wallet
+  WITHDRAWAL_FEE       // Network fee for withdrawal
+  REFUND_CREDIT        // Refund credited back
+  MANUAL_ADJUSTMENT    // Admin adjustment
+}
+
+model UserBalance {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  available       BigInt   @default(0)    // Available for withdrawal (nanoTON)
+  pending         BigInt   @default(0)    // Pending from active deals
+  totalEarned     BigInt   @default(0)    // Lifetime earnings
+  totalWithdrawn  BigInt   @default(0)    // Lifetime withdrawals
+  totalReferral   BigInt   @default(0)    // Lifetime referral earnings
+  updatedAt       DateTime @updatedAt
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions BalanceTransaction[]
+  withdrawals  Withdrawal[]
+
+  @@map("user_balances")
+}
+
+model BalanceTransaction {
+  id             String                 @id @default(cuid())
+  balanceId      String
+  type           BalanceTransactionType
+  amount         BigInt                 // nanoTON (positive = credit, negative = debit)
+  description    String?
+  dealId         String?                // Related deal
+  referralId     String?                // Related referral
+  withdrawalId   String?                // Related withdrawal
+  metadata       Json?
+  createdAt      DateTime               @default(now())
+
+  balance    UserBalance @relation(fields: [balanceId], references: [id], onDelete: Cascade)
+  deal       Deal?       @relation(fields: [dealId], references: [id])
+
+  @@index([balanceId])
+  @@index([type])
+  @@index([dealId])
+  @@index([createdAt])
+  @@map("balance_transactions")
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Withdrawal {
+  id              String           @id @default(cuid())
+  userId          String
+  balanceId       String
+  amount          BigInt           // Amount requested (nanoTON)
+  fee             BigInt           @default(0)  // Network fee
+  netAmount       BigInt           // Amount sent = amount - fee
+  toAddress       String           // Destination TON wallet
+  status          WithdrawalStatus @default(PENDING)
+  txHash          String?          // Blockchain tx hash
+  errorMessage    String?
+  processedAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  balance    UserBalance @relation(fields: [balanceId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("withdrawals")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REFERRAL MODELS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Referral {
+  id             String   @id @default(cuid())
+  referrerId     String                      // User who referred
+  referredUserId String   @unique            // User who was referred (one referrer per user)
+  referralCode   String                      // Code used
+  isActive       Boolean  @default(true)     // Can be deactivated
+  totalEarned    BigInt   @default(0)        // Total earned from this referral
+  dealCount      Int      @default(0)        // Deals completed by referred user
+  createdAt      DateTime @default(now())
+
+  earnings ReferralEarning[]
+
+  @@index([referrerId])
+  @@index([referredUserId])
+  @@index([referralCode])
+  @@map("referrals")
+}
+
+model ReferralEarning {
+  id           String   @id @default(cuid())
+  referralId   String
+  dealId       String                      // Deal that generated this earning
+  dealAmount   BigInt                      // Deal total amount
+  platformFee  BigInt                      // Platform fee from deal
+  earning      BigInt                      // Referral earning (20% of platform fee)
+  createdAt    DateTime @default(now())
+
+  referral Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
+  deal     Deal     @relation(fields: [dealId], references: [id])
+
+  @@index([referralId])
+  @@index([dealId])
+  @@index([createdAt])
+  @@map("referral_earnings")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATION SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model NotificationSettings {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  inAppEnabled       Boolean  @default(true)
+  telegramEnabled    Boolean  @default(true)
+
+  dealsEnabled       Boolean  @default(true)
+  reviewsEnabled     Boolean  @default(true)
+  walletEnabled      Boolean  @default(true)
+  referralEnabled    Boolean  @default(true)
+  marketingEnabled   Boolean  @default(true)
+
+  quietHoursEnabled  Boolean  @default(false)
+  quietHoursStart    String?
+  quietHoursEnd      String?
+  quietHoursTimezone String?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("notification_settings")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPPORT TICKETS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model SupportTicket {
+  id              String         @id @default(cuid())
+  ticketNumber    String         @unique
+  userId          String
+  user            User           @relation(fields: [userId], references: [id])
+
+  category        TicketCategory
+  priority        TicketPriority @default(MEDIUM)
+  status          TicketStatus   @default(OPEN)
+  subject         String
+
+  dealId          String?
+  deal            Deal?          @relation(fields: [dealId], references: [id])
+  channelId       String?
+  channel         Channel?       @relation(fields: [channelId], references: [id])
+  reportedUserId  String?
+
+  assignedTo      String?
+  tags            String[]       @default([])
+
+  messages        SupportMessage[]
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([ticketNumber])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id              String        @id @default(cuid())
+  ticketId        String
+  ticket          SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  senderId        String?
+  sender          User?         @relation(fields: [senderId], references: [id])
+  isFromSupport   Boolean       @default(false)
+  isSystemMessage Boolean       @default(false)
+
+  content         String
+  attachments     Json?
+
+  createdAt       DateTime      @default(now())
+
+  @@index([ticketId, createdAt])
+  @@map("support_messages")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FAQ / HELP CENTER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model FaqCategory {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  description String?
+  icon        String?
+  order       Int       @default(0)
+  isPublished Boolean   @default(true)
+  items       FaqItem[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("faq_categories")
+}
+
+model FaqItem {
+  id          String      @id @default(cuid())
+  categoryId  String
+  category    FaqCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  question    String
+  answer      String
+  order       Int         @default(0)
+  isPublished Boolean     @default(true)
+  viewCount   Int         @default(0)
+  helpfulYes  Int         @default(0)
+  helpfulNo   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([categoryId])
+  @@map("faq_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ONBOARDING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model UserOnboarding {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  welcomeScreenSeen     Boolean  @default(false)
+  exploreTooltipSeen    Boolean  @default(false)
+  channelsTooltipSeen   Boolean  @default(false)
+  dealsTooltipSeen      Boolean  @default(false)
+  walletTooltipSeen     Boolean  @default(false)
+  profileTooltipSeen    Boolean  @default(false)
+  firstChannelAdded     Boolean  @default(false)
+  firstDealCreated      Boolean  @default(false)
+  firstDealCompleted    Boolean  @default(false)
+  walletConnected       Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("user_onboarding")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FAVORITES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Favorite {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId  String
+  channel    Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, channelId])
+  @@index([userId])
+  @@index([channelId])
+  @@map("favorites")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SAVED FILTERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model SavedFilter {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  filters    Json
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@map("saved_filters")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACHIEVEMENTS & GAMIFICATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+model Achievement {
+  id          String            @id @default(cuid())
+  key         String            @unique
+  name        String
+  description String
+  icon        String
+  category    String
+  xpReward    Int               @default(0)
+  condition   Json
+  isActive    Boolean           @default(true)
+  order       Int               @default(0)
+  createdAt   DateTime          @default(now())
+
+  userAchievements UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  unlockedAt    DateTime    @default(now())
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@map("user_achievements")
+}
+
+model UserLevel {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level       Int      @default(1)
+  xp          Int      @default(0)
+  totalXp     Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@map("user_levels")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VERIFICATION REQUESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+enum VerificationTier {
+  NONE
+  BASIC
+  VERIFIED
+  PREMIUM
+  ENTERPRISE
+}
+
+enum VerificationRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model VerificationRequest {
+  id          String                    @id @default(cuid())
+  channelId   String
+  channel     Channel                   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  tier        VerificationTier
+  status      VerificationRequestStatus @default(PENDING)
+  documents   String[]                  @default([])
+  notes       String?
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNotes String?
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  @@index([channelId])
+  @@index([status])
+  @@map("verification_requests")
+}

@@ -1,0 +1,317 @@
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; MONOFACTURE DEAL ESCROW v2.0
+;; TON Smart Contract for Telegram Ads Marketplace
+;; 
+;; Flow:
+;; 1. Contract deployed with deal params (advertiser, publisher, platform, amount, deadline)
+;; 2. Advertiser sends TON >= total_amount → auto-funded
+;; 3. On success: platform sends op=RELEASE → all funds to platform wallet
+;; 4. On failure: platform sends op=REFUND or advertiser after deadline → refund
+;; 5. Dispute: either party → freeze. Platform resolves.
+;;
+;; On release, ALL funds go to platform wallet. Backend handles distribution:
+;;   - Publisher amount → publisher's in-app balance
+;;   - Platform fee → platform keeps
+;;   - Referral fee → referrer's in-app balance (from platform fee)
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+;; ═══ Storage Layout ═══
+;; Cell 1 (main):
+;;   uint64   deal_id
+;;   addr     advertiser
+;;   addr     publisher  
+;;   addr     platform_wallet
+;;   coins    total_amount        ;; full amount advertiser pays (price + commission)
+;;   coins    publisher_amount    ;; what publisher should receive (stored for transparency)
+;;   uint8    status              ;; 0=pending, 1=funded, 2=released, 3=refunded, 4=disputed
+;;   uint64   deadline            ;; unix timestamp for auto-refund eligibility
+;;   uint64   created_at
+
+;; ═══ Status Codes ═══
+const int STATUS_PENDING  = 0;
+const int STATUS_FUNDED   = 1;
+const int STATUS_RELEASED = 2;
+const int STATUS_REFUNDED = 3;
+const int STATUS_DISPUTED = 4;
+
+;; ═══ Operation Codes ═══
+const int OP_RELEASE         = 0x01;   ;; Platform releases funds (deal completed)
+const int OP_REFUND          = 0x02;   ;; Refund to advertiser
+const int OP_DISPUTE         = 0x03;   ;; Freeze funds (dispute)
+const int OP_RESOLVE         = 0x04;   ;; Platform resolves dispute
+const int OP_EXTEND_DEADLINE = 0x05;   ;; Platform extends deadline
+
+;; ═══ Error Codes ═══
+const int ERR_UNAUTHORIZED       = 101;
+const int ERR_INVALID_STATE      = 102;
+const int ERR_INSUFFICIENT_FUNDS = 103;
+const int ERR_DEADLINE_NOT_MET   = 104;
+const int ERR_ALREADY_FUNDED     = 105;
+const int ERR_INVALID_OP         = 106;
+
+;; ═══ Constants ═══
+const int MIN_TON_FOR_STORAGE = 10000000;     ;; 0.01 TON - keep for storage
+const int GAS_CONSUMPTION     = 15000000;     ;; 0.015 TON - gas for sending messages
+const int FUNDING_TOLERANCE   = 50000000;     ;; 0.05 TON - allow small overpayment without triggering refund
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; STORAGE
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+(int, slice, slice, slice, int, int, int, int, int) load_data() inline {
+    slice ds = get_data().begin_parse();
+    return (
+        ds~load_uint(64),       ;; deal_id
+        ds~load_msg_addr(),     ;; advertiser
+        ds~load_msg_addr(),     ;; publisher
+        ds~load_msg_addr(),     ;; platform_wallet
+        ds~load_coins(),        ;; total_amount
+        ds~load_coins(),        ;; publisher_amount
+        ds~load_uint(8),        ;; status
+        ds~load_uint(64),       ;; deadline
+        ds~load_uint(64)        ;; created_at
+    );
+}
+
+() save_data(int deal_id, slice advertiser, slice publisher, slice platform,
+             int total_amount, int publisher_amount, int status, int deadline, int created_at) impure inline {
+    set_data(begin_cell()
+        .store_uint(deal_id, 64)
+        .store_slice(advertiser)
+        .store_slice(publisher)
+        .store_slice(platform)
+        .store_coins(total_amount)
+        .store_coins(publisher_amount)
+        .store_uint(status, 8)
+        .store_uint(deadline, 64)
+        .store_uint(created_at, 64)
+    .end_cell());
+}
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; HELPERS
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+() send_msg(slice to_addr, int amount, cell body, int mode) impure inline {
+    cell msg = begin_cell()
+        .store_uint(0x18, 6)           ;; nobounce
+        .store_slice(to_addr)
+        .store_coins(amount)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1)
+        .store_uint(1, 1)              ;; body as ref
+        .store_ref(body)
+    .end_cell();
+    send_raw_message(msg, mode);
+}
+
+() send_simple(slice to_addr, int amount, int mode) impure inline {
+    cell msg = begin_cell()
+        .store_uint(0x18, 6)
+        .store_slice(to_addr)
+        .store_coins(amount)
+        .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+    .end_cell();
+    send_raw_message(msg, mode);
+}
+
+cell build_comment(slice text) inline {
+    return begin_cell()
+        .store_uint(0, 32)
+        .store_slice(text)
+    .end_cell();
+}
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; MAIN RECEIVER
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    ;; Parse incoming message
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+    if (flags & 1) { return (); }   ;; ignore bounced
+    
+    slice sender = cs~load_msg_addr();
+    
+    (int deal_id, slice advertiser, slice publisher, slice platform,
+     int total_amount, int publisher_amount, int status, int deadline, int created_at) = load_data();
+
+    ;; ═══ AUTO-FUND: Handle plain TON transfer (empty body or zero op) ═══
+    ;; When advertiser sends TON without op code, treat as deposit
+    if (in_msg_body.slice_empty?()) {
+        ;; Only when pending
+        if (status == STATUS_PENDING) {
+            ;; Check sender is advertiser
+            throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, advertiser));
+            ;; Check sufficient funds (balance after this message)
+            throw_unless(ERR_INSUFFICIENT_FUNDS, my_balance >= total_amount);
+            
+            ;; Mark as funded
+            save_data(deal_id, advertiser, publisher, platform,
+                      total_amount, publisher_amount, STATUS_FUNDED, deadline, created_at);
+            return ();
+        }
+        ;; If already funded, accept excess (will be refunded with release/refund)
+        return ();
+    }
+
+    ;; Parse op code
+    int op = in_msg_body~load_uint(32);
+    
+    ;; Handle text comment (op = 0) — treat as deposit too
+    if (op == 0) {
+        if (status == STATUS_PENDING) {
+            throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, advertiser));
+            throw_unless(ERR_INSUFFICIENT_FUNDS, my_balance >= total_amount);
+            
+            save_data(deal_id, advertiser, publisher, platform,
+                      total_amount, publisher_amount, STATUS_FUNDED, deadline, created_at);
+        }
+        return ();
+    }
+
+    int query_id = in_msg_body~load_uint(64);
+
+    ;; ═══ RELEASE (op=0x01) — Platform releases funds after successful deal ═══
+    if (op == OP_RELEASE) {
+        throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, platform));
+        throw_unless(ERR_INVALID_STATE, status == STATUS_FUNDED);
+        
+        ;; Send ALL balance to platform wallet (minus storage rent)
+        ;; Platform backend handles distribution to publisher, referrer, etc.
+        ;; Use mode 128 to send entire balance minus gas
+        send_msg(platform, 0, build_comment("escrow_release"), 128 + 32);
+        
+        save_data(deal_id, advertiser, publisher, platform,
+                  total_amount, publisher_amount, STATUS_RELEASED, deadline, created_at);
+        return ();
+    }
+
+    ;; ═══ REFUND (op=0x02) — Return funds to advertiser ═══
+    if (op == OP_REFUND) {
+        int is_platform = equal_slices(sender, platform);
+        int is_advertiser = equal_slices(sender, advertiser);
+        
+        ;; Platform can refund anytime when funded
+        ;; Advertiser can refund only after deadline
+        if (is_advertiser) {
+            throw_unless(ERR_DEADLINE_NOT_MET, now() >= deadline);
+        }
+        throw_unless(ERR_UNAUTHORIZED, is_platform | is_advertiser);
+        throw_unless(ERR_INVALID_STATE, status == STATUS_FUNDED);
+        
+        ;; Send entire balance back to advertiser
+        send_msg(advertiser, 0, build_comment("escrow_refund"), 128 + 32);
+        
+        save_data(deal_id, advertiser, publisher, platform,
+                  total_amount, publisher_amount, STATUS_REFUNDED, deadline, created_at);
+        return ();
+    }
+
+    ;; ═══ DISPUTE (op=0x03) — Freeze funds ═══
+    if (op == OP_DISPUTE) {
+        int is_advertiser = equal_slices(sender, advertiser);
+        int is_publisher = equal_slices(sender, publisher);
+        throw_unless(ERR_UNAUTHORIZED, is_advertiser | is_publisher);
+        throw_unless(ERR_INVALID_STATE, status == STATUS_FUNDED);
+        
+        save_data(deal_id, advertiser, publisher, platform,
+                  total_amount, publisher_amount, STATUS_DISPUTED, deadline, created_at);
+        return ();
+    }
+
+    ;; ═══ RESOLVE (op=0x04) — Platform resolves dispute ═══
+    if (op == OP_RESOLVE) {
+        throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, platform));
+        throw_unless(ERR_INVALID_STATE, status == STATUS_DISPUTED);
+        
+        ;; resolution: 0 = refund advertiser, 1 = release to platform (publisher wins)
+        int resolution = in_msg_body~load_uint(1);
+        
+        if (resolution == 0) {
+            ;; Refund advertiser
+            send_msg(advertiser, 0, build_comment("dispute_refund"), 128 + 32);
+            save_data(deal_id, advertiser, publisher, platform,
+                      total_amount, publisher_amount, STATUS_REFUNDED, deadline, created_at);
+        } else {
+            ;; Release to platform (publisher wins)
+            send_msg(platform, 0, build_comment("dispute_release"), 128 + 32);
+            save_data(deal_id, advertiser, publisher, platform,
+                      total_amount, publisher_amount, STATUS_RELEASED, deadline, created_at);
+        }
+        return ();
+    }
+
+    ;; ═══ EXTEND DEADLINE (op=0x05) — Platform extends deadline ═══
+    if (op == OP_EXTEND_DEADLINE) {
+        throw_unless(ERR_UNAUTHORIZED, equal_slices(sender, platform));
+        throw_unless(ERR_INVALID_STATE, (status == STATUS_FUNDED) | (status == STATUS_DISPUTED));
+        
+        int new_deadline = in_msg_body~load_uint(64);
+        ;; New deadline must be in the future
+        throw_unless(ERR_DEADLINE_NOT_MET, new_deadline > now());
+        
+        save_data(deal_id, advertiser, publisher, platform,
+                  total_amount, publisher_amount, status, new_deadline, created_at);
+        return ();
+    }
+
+    throw(ERR_INVALID_OP);
+}
+
+;; ═══════════════════════════════════════════════════════════════════════════════
+;; GET METHODS (read-only, for verification)
+;; ═══════════════════════════════════════════════════════════════════════════════
+
+;; Full escrow data
+(int, slice, slice, slice, int, int, int, int, int) get_escrow_data() method_id {
+    return load_data();
+}
+
+;; Current status (0=pending, 1=funded, 2=released, 3=refunded, 4=disputed)
+int get_status() method_id {
+    (_, _, _, _, _, _, int status, _, _) = load_data();
+    return status;
+}
+
+;; Total amount locked
+int get_total_amount() method_id {
+    (_, _, _, _, int total_amount, _, _, _, _) = load_data();
+    return total_amount;
+}
+
+;; Publisher amount (for transparency)
+int get_publisher_amount() method_id {
+    (_, _, _, _, _, int publisher_amount, _, _, _) = load_data();
+    return publisher_amount;
+}
+
+;; Platform fee (total - publisher)
+int get_platform_fee() method_id {
+    (_, _, _, _, int total_amount, int publisher_amount, _, _, _) = load_data();
+    return total_amount - publisher_amount;
+}
+
+;; Deadline timestamp
+int get_deadline() method_id {
+    (_, _, _, _, _, _, _, int deadline, _) = load_data();
+    return deadline;
+}
+
+;; Is deadline passed?
+int is_expired() method_id {
+    (_, _, _, _, _, _, _, int deadline, _) = load_data();
+    return now() >= deadline;
+}
+
+;; Deal ID
+int get_deal_id() method_id {
+    (int deal_id, _, _, _, _, _, _, _, _) = load_data();
+    return deal_id;
+}
+
+;; Contract balance
+int get_locked_balance() method_id {
+    ;; Returns actual TON balance of this contract
+    return get_balance().pair_first();
+}

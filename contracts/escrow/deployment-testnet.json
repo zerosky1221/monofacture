@@ -1,0 +1,13 @@
+{
+  "network": "testnet",
+  "contractAddress": "kQAzCK-7tzYRK6uumWN9vbKosxml9qHvaNed8wODRcD48mD0",
+  "explorerUrl": "https://testnet.tonviewer.com/kQAzCK-7tzYRK6uumWN9vbKosxml9qHvaNed8wODRcD48mD0",
+  "deployerAddress": "0QBKFo-fiSLRY4x6oJSvX4wVsqCO3nJghVdZ1gFU_eza19wi",
+  "platformWallet": "kQBKFo-fiSLRY4x6oJSvX4wVsqCO3nJghVdZ1gFU_eza14Hn",
+  "dealId": 1,
+  "totalAmount": "1.05",
+  "publisherAmount": "1",
+  "platformFee": "0.05",
+  "deadline": "2026-02-08T14:12:38.000Z",
+  "deployedAt": "2026-02-01T14:12:47.311Z"
+}

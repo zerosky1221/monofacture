@@ -1,0 +1,151 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:17-alpine
+    container_name: telegram-ads-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-telegram_ads}
+      # Optimize PostgreSQL for low memory
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Memory limits for 4GB VPS
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    command: >
+      postgres
+      -c max_connections=50
+      -c shared_buffers=128MB
+      -c effective_cache_size=256MB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.7
+      -c wal_buffers=8MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=1GB
+      -c max_wal_size=2GB
+
+  # Redis
+  redis:
+    image: redis:7.4-alpine
+    container_name: telegram-ads-redis
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  # API Service
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: telegram-ads-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-telegram_ads}?connection_limit=5&pool_timeout=30
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME}
+      TELEGRAM_WEBAPP_URL: ${TELEGRAM_WEBAPP_URL:-https://app.zerosky.dev}
+      WEBAPP_URL: ${WEBAPP_URL:-https://app.zerosky.dev}
+      TON_NETWORK: ${TON_NETWORK:-mainnet}
+      TON_TESTNET: ${TON_TESTNET:-false}
+      TON_API_KEY: ${TON_API_KEY}
+      TON_PLATFORM_WALLET_ADDRESS: ${TON_PLATFORM_WALLET_ADDRESS}
+      ESCROW_MASTER_SEED: ${ESCROW_MASTER_SEED}
+      # Node.js memory limit
+      NODE_OPTIONS: "--max-old-space-size=768"
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    # Graceful shutdown
+    stop_grace_period: 30s
+
+  # Web Service
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+        VITE_TON_CONNECT_MANIFEST_URL: ${VITE_TON_CONNECT_MANIFEST_URL:-https://app.zerosky.dev/tonconnect-manifest.json}
+        VITE_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-monofacturebot}
+    container_name: telegram-ads-web
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: telegram-ads-network

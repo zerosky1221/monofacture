@@ -1,0 +1,19 @@
+{
+  "test": "e2e-testnet",
+  "timestamp": "2026-02-01T13:30:55.797Z",
+  "network": "testnet",
+  "dealId": 1769952615846,
+  "contractAddress": "kQDLprVzNDvm0i2ocF1jaQSci81pGn0_cuElGmEYlVzuB-kR",
+  "explorerUrl": "https://testnet.tonviewer.com/kQDLprVzNDvm0i2ocF1jaQSci81pGn0_cuElGmEYlVzuB-kR",
+  "walletAddress": "0QBKFo-fiSLRY4x6oJSvX4wVsqCO3nJghVdZ1gFU_eza19wi",
+  "escrowAmount": "1.05",
+  "publisherAmount": "1",
+  "platformFee": "0.05",
+  "gasSpent": "0.034664499",
+  "steps": {
+    "deploy": "✅ PASSED",
+    "fund": "✅ PASSED",
+    "release": "✅ PASSED"
+  },
+  "result": "ALL PASSED"
+}
